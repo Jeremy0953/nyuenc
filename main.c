@@ -6,29 +6,31 @@
 #include <unistd.h>
 #include <string.h>
 
+// 保存上次字符和计数的全局变量
+char lastChar = 0;
+unsigned char lastCount = 0;
+
+void flushLastChar(FILE *outputFile) {
+    if (lastCount > 0) {
+        fwrite(&lastChar, 1, 1, outputFile);
+        fwrite(&lastCount, sizeof(unsigned char), 1, outputFile);
+        lastCount = 0; // 重置计数
+    }
+}
+
 void encode(const char *data, size_t size, FILE *outputFile) {
     if (size == 0) return;
 
-    char currentChar = data[0];
-    unsigned char count = 1; // 使用unsigned char而不是size_t
-
-    for (size_t i = 1; i < size; i++) {
-        if (data[i] == currentChar) {
-            count++;
+    for (size_t i = 0; i < size; i++) {
+        if (data[i] == lastChar) {
+            lastCount++;
         } else {
-            // 写入当前字符
-            fwrite(&currentChar, 1, 1, outputFile);
-            // 以二进制形式的16进制编码写入计数
-            fwrite(&count, sizeof(unsigned char), 1, outputFile);
+            flushLastChar(outputFile);
 
-            currentChar = data[i];
-            count = 1;
+            lastChar = data[i];
+            lastCount = 1;
         }
     }
-
-    // 处理最后一组字符
-    fwrite(&currentChar, 1, 1, outputFile);
-    fwrite(&count, sizeof(unsigned char), 1, outputFile);
 }
 
 int main(int argc, char *argv[]) {
@@ -74,6 +76,9 @@ int main(int argc, char *argv[]) {
         munmap(data, sb.st_size);
         close(fd);
     }
+
+    // 处理最后一次字符和计数
+    flushLastChar(outputFile);
 
     fclose(outputFile);
     return 0;
