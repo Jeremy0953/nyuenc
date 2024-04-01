@@ -342,3 +342,139 @@ apropos map
 这将列出所有包含“map”字符串的命令和函数的简短描述，你可以根据这个列表进一步使用`man`命令查看详细文档。
 
 注意，有时一些函数可能在多个部分的手册页中有文档，例如，有些函数既在系统调用部分（通常是第2部分）也在标准C库函数部分（通常是第3部分）。你可以通过指定部分号来查看特定部分的手册页，比如`man 2 open`查看系统调用的`open`，`man 3 printf`查看C库中的`printf`函数。如果不指定部分号，`man`通常会显示第一个找到的手册页。
+
+# 6
+
+要将你的代码与多线程和线程池结合使用，我们首先需要定义一个简单的线程池和任务结构。考虑到在这个场景中的特殊要求，我们将每个4KB的文件块作为一个单独的任务提交给线程池。这意味着我们需要对你的程序进行较大的修改，特别是在任务的划分和多线程处理方面。
+
+然而，C标准库本身并不提供线程池的实现。所以，我们将使用POSIX线程（pthreads）来手动实现一个非常基础的线程池。注意，这将是一个相当简单的实现，不包括一些高级特性，如动态调整线程数或优雅地处理线程退出等。
+
+下面的代码展示了如何结合使用`mmap`、多线程以及一个非常基本的线程池来实现你的需求。请注意，为了保持简单，这个示例假设你已经知道如何设置编译器以链接到pthread库，并且忽略了一些高级错误处理和优化。
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <pthread.h>
+#include <unistd.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <string.h>
+
+#define BLOCK_SIZE 4096 // 4KB
+#define MAX_THREADS 4
+
+pthread_mutex_t lock;
+char lastChar = 0;
+unsigned char lastCount = 0;
+FILE *outputFile;
+
+typedef struct {
+    const char *data;
+    size_t size;
+} EncodeTask;
+
+void flushLastChar() {
+    if (lastCount > 0) {
+        fwrite(&lastChar, 1, 1, outputFile);
+        fwrite(&lastCount, sizeof(unsigned char), 1, outputFile);
+        lastCount = 0;
+    }
+}
+
+void *encode(void *arg) {
+    EncodeTask *task = (EncodeTask *)arg;
+
+    pthread_mutex_lock(&lock); // 确保对全局变量的修改是线程安全的
+    if (task->size == 0) {
+        pthread_mutex_unlock(&lock);
+        return NULL;
+    }
+
+    for (size_t i = 0; i < task->size; ++i) {
+        if (task->data[i] == lastChar && lastCount < 255) {
+            lastCount++;
+        } else {
+            flushLastChar();
+            lastChar = task->data[i];
+            lastCount = 1;
+        }
+    }
+    pthread_mutex_unlock(&lock);
+
+    return NULL;
+}
+
+int main(int argc, char *argv[]) {
+    if (argc < 3) {
+        fprintf(stderr, "Usage: %s <input_file> <output_file>\n", argv[0]);
+        return EXIT_FAILURE;
+    }
+
+    outputFile = fopen(argv[2], "wb");
+    if (!outputFile) {
+        perror("Error opening output file");
+        return EXIT_FAILURE;
+    }
+
+    int fd = open(argv[1], O_RDONLY);
+    if (fd == -1) {
+        perror("Error opening input file");
+        fclose(outputFile);
+        return EXIT_FAILURE;
+    }
+
+    struct stat sb;
+    if (fstat(fd, &sb) == -1) {
+        perror("Error getting file size");
+        close(fd);
+        fclose(outputFile);
+        return EXIT_FAILURE;
+    }
+
+    char *data = mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (data == MAP_FAILED) {
+        perror("Error mmapping the file");
+        close(fd);
+        fclose(outputFile);
+        return EXIT_FAILURE;
+    }
+
+    pthread_mutex_init(&lock, NULL);
+    pthread_t threads[MAX_THREADS];
+    EncodeTask tasks[MAX_THREADS];
+    size_t blockSize = BLOCK_SIZE;
+
+    for (size_t offset = 0; offset < sb.st_size; offset += BLOCK_SIZE) {
+        size_t size = (sb.st_size - offset) < BLOCK_SIZE ? (sb.st_size - offset) : BLOCK_SIZE;
+        tasks[offset / BLOCK_SIZE % MAX_THREADS] = (EncodeTask){.data = data + offset, .size = size};
+
+        if (pthread_create(&threads[offset / BLOCK_SIZE % MAX_THREADS], NULL, encode, &tasks[offset / BLOCK_SIZE % MAX_THREADS])) {
+            perror("Failed to create thread");
+            munmap(data, sb.st_size);
+            close(fd);
+            fclose(outputFile);
+            return EXIT_FAILURE;
+        }
+
+        if (offset / BLOCK_SIZE % MAX_THREADS ==
+
+ MAX_THREADS - 1 || offset + BLOCK_SIZE >= sb.st_size) {
+            for (int i = 0; i < MAX_THREADS && i <= offset / BLOCK_SIZE; ++i) {
+                pthread_join(threads[i], NULL);
+            }
+        }
+    }
+
+    flushLastChar(); // 确保最后的字符被处理
+    munmap(data, sb.st_size);
+    close(fd);
+    fclose(outputFile);
+
+    return 0;
+}
+```
+
+这个代码示例实现了一个简单的“线程池”，实际上是在循环中重复使用了固定数量的线程。每个线程被分配一个4KB的数据块进行编码。由于编码过程中需要访问和修改共享的全局变量（如`lastChar`和`lastCount`），我们使用互斥锁来确保操作的原子性和线程安全。
+
+请注意，这种简化的线程池实现方法不是特别高效或灵活，尤其是在处理大量小任务时。对于实际的生产环境，考虑使用更高级的线程池库，或根据具体需求设计更复杂的线程池策略。
