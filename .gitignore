@@ -1,3 +1,4 @@
 nyuenc-autograder/inputs/5.in
 .vscode/*
 build/*
+.DS_Store
