@@ -122,8 +122,8 @@ int main(int argc, char **argv)
 
     for (result_t *curr = results; curr != NULL; curr = curr->next)
     {
-        fwrite((char *)&(curr->count), sizeof(int), 1, stdout);
         fwrite((char *)&(curr->c), sizeof(char), 1, stdout);
+        fwrite((char *)&(curr->count), sizeof(char), 1, stdout);
     }
 
     sem_destroy(&filled);
