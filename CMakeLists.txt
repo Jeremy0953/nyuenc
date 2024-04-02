@@ -23,3 +23,5 @@ add_executable(nyuenc ${SOURCES})
 
 # Link pthread to your project
 target_link_libraries(nyuenc PRIVATE Threads::Threads)
+
+include_directories(${CMAKE_CURRENT_SOURCE_DIR})
