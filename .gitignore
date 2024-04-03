@@ -3,3 +3,15 @@ nyuenc-autograder/inputs/5.in
 build/*
 .DS_Store
 /dataset/*
+nyuenc-autograder/myoutputs/1.out
+nyuenc-autograder/myoutputs/2.out
+nyuenc-autograder/myoutputs/3.out
+nyuenc-autograder/myoutputs/4.out
+nyuenc-autograder/myoutputs/5.out
+nyuenc-autograder/myoutputs/6.out
+nyuenc-autograder/myoutputs/7.out
+nyuenc-autograder/code.zip
+multi_code.o
+nyuenc
+1.enc
+.multi_code.c.swp

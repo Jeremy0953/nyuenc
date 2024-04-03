@@ -8,6 +8,7 @@
 #include <sys/stat.h>    // stat, fstat
 #include <sys/mman.h>    // mmap
 #include <string.h>      // memset
+#include <unistd.h>
 
 #define handle_error(msg)   \
     do                      \
@@ -25,6 +26,12 @@ typedef struct _arg
     char **argv;
 } arg_t;
 
+typedef struct {
+    int jFlag;     // 标记是否有-j选项
+    int jValue;    // -j选项的值
+    int fileCount; // 文件数量
+    char **files;  // 文件名数组
+} CmdOptions;
 // Page object for munmap
 typedef struct _page
 {
@@ -75,6 +82,7 @@ void wenqueue(work_t work);
 work_t *wdequeue();
 result_t *compress(work_t work);
 void renqueue(result_t *result);
+void singleThreadProcess(arg_t *args);
 
 int main(int argc, char **argv)
 {
@@ -83,17 +91,34 @@ int main(int argc, char **argv)
         fprintf(stderr, "pzip: file1 [file2 ...]\n");
         exit(EXIT_FAILURE);
     }
-
+    CmdOptions opts = {0, 0, 0, NULL};
+    int opt;
     arg_t *args = malloc(sizeof(arg_t));
-
+    while ((opt = getopt(argc, argv, "j:")) != -1) {
+        switch (opt) {
+            case 'j':
+                opts.jFlag = 1;
+                opts.jValue = atoi(optarg);
+                break;
+            case '?':
+                fprintf(stderr, "Usage: %s [-j value] file [file...]\n", argv[0]);
+                exit(EXIT_FAILURE);
+        }
+    }
     if (args == NULL)
         handle_error("Malloc args");
+    opts.fileCount = argc - optind;
+    opts.files = argv + optind;
+    args->argc = opts.fileCount;
+    args->argv = opts.files;
 
-    args->argc = argc - 1;
-    args->argv = argv + 1; // Remove the first argument
-
-    nprocs = get_nprocs();           // Let the system decide how many thread will be used
-    nfiles = argc - 1;               // Remove the first argument
+    if (opts.jFlag) {
+        nprocs = opts.jValue;
+    } else {
+        singleThreadProcess(args);
+        return 0;
+    }         
+    nfiles = opts.fileCount;               
     pagesz = sysconf(_SC_PAGE_SIZE); // Let the system decide how big a page is
     order = malloc(sizeof(sem_t) * nprocs);
     npage_onfile = malloc(sizeof(int) * nfiles);
@@ -410,4 +435,49 @@ void *consumer(void *args)
     }
 
     return NULL;
+}
+void singleThreadProcess(arg_t *args) {
+    char **fnames = args->argv;
+    for (int i = 0; i < args->argc; i++) {
+        int fd = open(fnames[i], O_RDONLY);
+        if (fd == -1)
+            handle_error("open error");
+
+        struct stat sb;
+        if (fstat(fd, &sb) == -1)
+            handle_error("fstat error");
+
+        if (sb.st_size == 0)
+            continue;
+
+        char *addr = mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+        if (addr == MAP_FAILED)
+            handle_error("mmap failed");
+
+        work_t work;
+        work.addr = addr;
+        work.pagesz = sb.st_size;
+        work.filenm = i;
+        work.pagenm = 0; // 仅一个页面的简化处理
+        work.next = NULL;
+
+        result_t *result = compress(work);
+        renqueue(result);
+
+        munmap(addr, sb.st_size);
+        close(fd);
+    }
+
+    // 输出结果
+    for (result_t *curr = results; curr != NULL; curr = curr->next) {
+        fwrite((char *)&(curr->c), sizeof(char), 1, stdout);
+        fwrite((int *)&(curr->count), sizeof(char), 1, stdout);
+    }
+
+    // 清理结果链表
+    while (results != NULL) {
+        result_t *temp = results;
+        results = results->next;
+        free(temp);
+    }
 }
