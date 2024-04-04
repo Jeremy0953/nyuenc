@@ -478,3 +478,8 @@ int main(int argc, char *argv[]) {
 这个代码示例实现了一个简单的“线程池”，实际上是在循环中重复使用了固定数量的线程。每个线程被分配一个4KB的数据块进行编码。由于编码过程中需要访问和修改共享的全局变量（如`lastChar`和`lastCount`），我们使用互斥锁来确保操作的原子性和线程安全。
 
 请注意，这种简化的线程池实现方法不是特别高效或灵活，尤其是在处理大量小任务时。对于实际的生产环境，考虑使用更高级的线程池库，或根据具体需求设计更复杂的线程池策略。
+
+```bash
+sudo docker run -i --name rocky_linux --privileged --r
+m -t -v /home/yangjiadong/assignments/os/rocky_linux_docker:/rocky_linux -w /rocky_linux ytang/os bash
+```
