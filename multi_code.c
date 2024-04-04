@@ -66,13 +66,15 @@ long pagesz; // Page size
 long pagenm; // Page number #
 long filenm; // File number #
 static int done = 0;
+static int encode_done = 0;
 static int curr_page = 0;
 static int *npage_onfile;
 
 static work_t *works, *work_head, *work_tail;
-static result_t *results, *result_tail;
+static result_t *results, *result_tail, *result_curr;
 static sem_t mutex, filled, page;
 static sem_t *order;
+static sem_t result_sem;
 
 /* Global functions */
 void *
@@ -83,6 +85,7 @@ work_t *wdequeue();
 result_t *compress(work_t work);
 void renqueue(result_t *result);
 void singleThreadProcess(arg_t *args);
+void *collectResult(void *args);
 
 int main(int argc, char **argv)
 {
@@ -115,7 +118,9 @@ int main(int argc, char **argv)
     if (opts.jFlag) {
         nprocs = opts.jValue;
     } else {
+        sem_init(&result_sem, 0, 1);
         singleThreadProcess(args);
+        sem_destroy(&result_sem);
         return 0;
     }         
     nfiles = opts.fileCount;               
@@ -127,8 +132,9 @@ int main(int argc, char **argv)
     sem_init(&mutex, 0, 1);
     sem_init(&filled, 0, 0);
     sem_init(&page, 0, 0);
+    sem_init(&result_sem, 0, 1);
 
-    pthread_t pid, cid[nprocs];
+    pthread_t pid, cid[nprocs], collector_pid;
 
     pthread_create(&pid, NULL, producer, (void *)args);
 
@@ -138,22 +144,21 @@ int main(int argc, char **argv)
         sem_init(&order[i], 0, i ? 0 : 1);
     }
 
+    pthread_create(&collector_pid, NULL, collectResult, (void *)args);
+
     for (int i = 0; i < nprocs; i++)
     {
         pthread_join(cid[i], NULL);
     }
-
+    encode_done = 1;
     pthread_join(pid, NULL);
+    pthread_join(collector_pid, NULL);
 
-    for (result_t *curr = results; curr != NULL; curr = curr->next)
-    {
-        fwrite((char *)&(curr->c), sizeof(char), 1, stdout);
-        fwrite((char *)&(curr->count), sizeof(char), 1, stdout);
-    }
 
     sem_destroy(&filled);
     sem_destroy(&mutex);
     sem_destroy(&page);
+    sem_destroy(&result_sem);
     for (int i = 0; i < nprocs; i++)
     {
         sem_destroy(&order[i]);
@@ -334,6 +339,7 @@ result_t *compress(work_t work)
 
 void renqueue(result_t *result)
 {
+    sem_wait(&result_sem);
     if (results == NULL)
     {
         results = result;
@@ -357,6 +363,7 @@ void renqueue(result_t *result)
     }
 
     result_tail = curr;
+    sem_post(&result_sem);
 }
 
 void *consumer(void *args)
@@ -482,4 +489,25 @@ void singleThreadProcess(arg_t *args) {
         results = results->next;
         free(temp);
     }
+}
+
+void *collectResult(void *args) {
+    while(!encode_done) {
+        sem_wait(&result_sem);
+        if(results != NULL) {
+            if (result_curr == NULL) {
+                result_curr = results;
+            }
+            while (result_curr != result_tail)
+            {
+                fwrite((char *)&(result_curr->c), sizeof(char), 1, stdout);
+                fwrite((char *)&(result_curr->count), sizeof(char), 1, stdout);
+                result_curr = result_curr->next;
+            }
+        }
+        sem_post(&result_sem);
+    }
+    fwrite((char *)&(result_tail->c), sizeof(char), 1, stdout);
+    fwrite((char *)&(result_tail->count), sizeof(char), 1, stdout);
+    return NULL;
 }
