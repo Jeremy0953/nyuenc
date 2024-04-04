@@ -140,8 +140,8 @@ int main(int argc, char **argv)
 
     for (int i = 0; i < nprocs; i++)
     {
-        pthread_create(&cid[i], NULL, consumer, (void *)args);
         sem_init(&order[i], 0, i ? 0 : 1);
+        pthread_create(&cid[i], NULL, consumer, (void *)args);
     }
 
     pthread_create(&collector_pid, NULL, collectResult, (void *)args);
