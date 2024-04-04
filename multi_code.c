@@ -340,12 +340,14 @@ void renqueue(result_t *result)
     }
     else
     {
+        result_t *tmp;
         if (result_tail->c == result->c)
         {
             result_tail->count += result->count;
+            tmp = result;
             result = result->next;
+            free(tmp);
         }
-
         result_tail->next = result;
     }
 
