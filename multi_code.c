@@ -75,8 +75,9 @@ static result_t *results, *result_tail, *result_curr;
 static sem_t mutex, filled, page;
 static sem_t *order;
 static sem_t result_sem;
-static pthread_rwlock_t lock = PTHREAD_RWLOCK_INITIALIZER;
-static pthread_rwlock_t lock_encode = PTHREAD_RWLOCK_INITIALIZER;
+static pthread_rwlock_t lock;
+static pthread_rwlock_t lock_encode;
+static pthread_mutex_t work_head_lock;
 /* Global functions */
 void *consumer(void *args);
 void wenqueue(work_t work);
@@ -132,6 +133,9 @@ int main(int argc, char **argv)
     sem_init(&filled, 0, 0);
     sem_init(&page, 0, 0);
     sem_init(&result_sem, 0, 1);
+    pthread_rwlock_init(&lock, NULL);
+    pthread_rwlock_init(&lock_encode, NULL);
+    pthread_mutex_init(&work_head_lock, NULL);
 
     pthread_t cid[nprocs], collector_pid;
 
@@ -211,6 +215,9 @@ int main(int argc, char **argv)
     sem_destroy(&mutex);
     sem_destroy(&page);
     sem_destroy(&result_sem);
+    pthread_rwlock_destroy(&lock);
+    pthread_rwlock_destroy(&lock_encode);
+    pthread_mutex_destroy(&work_head_lock);
     for (int i = 0; i < nprocs; i++)
     {
         sem_destroy(&order[i]);
@@ -361,6 +368,7 @@ void *consumer(void *args)
 {
     work_t *work;
     pthread_rwlock_rdlock(&lock);
+    pthread_mutex_lock(&work_head_lock);
     while (!done || work_head != NULL)
     {
         pthread_rwlock_unlock(&lock);
@@ -375,6 +383,7 @@ void *consumer(void *args)
         else if (work_head == NULL)
         {
             sem_post(&mutex); 
+            pthread_mutex_unlock(&work_head_lock);
             return NULL;
         }
         else
@@ -383,7 +392,7 @@ void *consumer(void *args)
             work_head = work_head->next;
             sem_post(&mutex);
         }
-
+        pthread_mutex_unlock(&work_head_lock);
         result_t *result = compress(*work);
 
         if (work->filenm == 0 && work->pagenm == 0)
@@ -436,8 +445,10 @@ void *consumer(void *args)
             }
         }
         pthread_rwlock_rdlock(&lock);
+        pthread_mutex_lock(&work_head_lock);
     }
     pthread_rwlock_unlock(&lock);
+    pthread_mutex_unlock(&work_head_lock);
     return NULL;
 }
 void singleThreadProcess(arg_t *args) {
