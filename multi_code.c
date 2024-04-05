@@ -75,10 +75,9 @@ static result_t *results, *result_tail, *result_curr;
 static sem_t mutex, filled, page;
 static sem_t *order;
 static sem_t result_sem;
-
+static pthread_rwlock_t lock = PTHREAD_RWLOCK_INITIALIZER;
+static pthread_rwlock_t lock_encode = PTHREAD_RWLOCK_INITIALIZER;
 /* Global functions */
-void *
-producer(void *args);
 void *consumer(void *args);
 void wenqueue(work_t work);
 work_t *wdequeue();
@@ -134,9 +133,7 @@ int main(int argc, char **argv)
     sem_init(&page, 0, 0);
     sem_init(&result_sem, 0, 1);
 
-    pthread_t pid, cid[nprocs], collector_pid;
-
-    //pthread_create(&pid, NULL, producer, (void *)args);
+    pthread_t cid[nprocs], collector_pid;
 
     for (int i = 0; i < nprocs; i++)
     {
@@ -191,8 +188,9 @@ int main(int argc, char **argv)
 
         close(fd);
     }
-
+    pthread_rwlock_wrlock(&lock);
     done = 1;
+    pthread_rwlock_unlock(&lock);
     for (int i = 0; i < nprocs; i++)
     {
         sem_post(&filled);
@@ -203,8 +201,9 @@ int main(int argc, char **argv)
     {
         pthread_join(cid[i], NULL);
     }
+    pthread_rwlock_wrlock(&lock_encode);
     encode_done = 1;
-    //pthread_join(pid, NULL);
+    pthread_rwlock_unlock(&lock_encode);
     pthread_join(collector_pid, NULL);
 
 
@@ -278,68 +277,6 @@ void wenqueue(work_t work)
         work_tail->next->next = NULL;
         work_tail = work_tail->next;
     }
-}
-
-void *producer(void *args)
-{
-    arg_t *arg = (arg_t *)args;
-    char **fnames = arg->argv;
-
-    for (int i = 0; i < arg->argc; i++)
-    {
-        int fd = open(fnames[i], O_RDONLY);
-
-        if (fd == -1)
-            handle_error("open error");
-
-        struct stat sb;
-
-        if (fstat(fd, &sb) == -1)
-            handle_error("fstat error");
-
-        if (sb.st_size == 0)
-            continue;
-
-        int p4f = sb.st_size / pagesz;
-
-        if ((double)sb.st_size / pagesz > p4f)
-            p4f++;
-
-        int offset = 0;
-        npage_onfile[i] = p4f;
-        char *addr = mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
-
-        for (int j = 0; j < p4f; j++)
-        {
-            // it should be less than or equal to the default page size
-            int curr_pagesz = (j < p4f - 1) ? pagesz : sb.st_size - ((p4f - 1) * pagesz);
-            offset += curr_pagesz;
-
-            work_t work;
-            work.addr = addr;
-            work.filenm = i;
-            work.pagenm = j;
-            work.pagesz = curr_pagesz;
-            work.next = NULL;
-
-            sem_wait(&mutex);
-            wenqueue(work);
-            sem_post(&mutex);
-            sem_post(&filled);
-
-            addr += curr_pagesz;
-        }
-
-        close(fd);
-    }
-
-    done = 1;
-    for (int i = 0; i < nprocs; i++)
-    {
-        sem_post(&filled);
-    }
-
-    pthread_exit(NULL);
 }
 
 work_t *wdequeue()
@@ -423,18 +360,21 @@ void renqueue(result_t *result)
 void *consumer(void *args)
 {
     work_t *work;
+    pthread_rwlock_rdlock(&lock);
     while (!done || work_head != NULL)
     {
+        pthread_rwlock_unlock(&lock);
         sem_wait(&filled);
         sem_wait(&mutex);
         if (work_head == work_tail && !done)
         {
             sem_post(&mutex);
+            pthread_rwlock_rdlock(&lock);
             continue;
         }
         else if (work_head == NULL)
         {
-            sem_post(&mutex);
+            sem_post(&mutex); 
             return NULL;
         }
         else
@@ -474,7 +414,7 @@ void *consumer(void *args)
                 }
                 if (curr_page == nfiles)
                 {
-                    sem_post(&page);
+                    sem_post(&page); 
                     return NULL;
                 }
                 sem_post(&page);
@@ -495,8 +435,9 @@ void *consumer(void *args)
                 break;
             }
         }
+        pthread_rwlock_rdlock(&lock);
     }
-
+    pthread_rwlock_unlock(&lock);
     return NULL;
 }
 void singleThreadProcess(arg_t *args) {
@@ -561,7 +502,9 @@ void singleThreadProcess(arg_t *args) {
 }
 
 void *collectResult(void *args) {
+    pthread_rwlock_rdlock(&lock_encode);
     while(!encode_done) {
+        pthread_rwlock_unlock(&lock_encode);
         sem_wait(&result_sem);
         if(results != NULL) {
             if (result_curr == NULL) {
@@ -575,7 +518,9 @@ void *collectResult(void *args) {
             }
         }
         sem_post(&result_sem);
+        pthread_rwlock_rdlock(&lock_encode);
     }
+    pthread_rwlock_unlock(&lock_encode);
     fwrite((char *)&(result_tail->c), sizeof(char), 1, stdout);
     fwrite((char *)&(result_tail->count), sizeof(char), 1, stdout);
     return NULL;

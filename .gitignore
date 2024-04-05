@@ -13,5 +13,6 @@ nyuenc-autograder/myoutputs/7.out
 nyuenc-autograder/code.zip
 multi_code.o
 nyuenc
-1.enc
+*.enc
 .multi_code.c.swp
+*.zip
