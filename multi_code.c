@@ -114,21 +114,21 @@ int main(int argc, char **argv)
     opts.files = argv + optind;
     args->argc = opts.fileCount;
     args->argv = opts.files;
-
+    pagesz = 4096;
+    nfiles = opts.fileCount; 
+    npage_onfile = malloc(sizeof(int) * nfiles);
+    memset(npage_onfile, 0, sizeof(int) * nfiles);
     if (opts.jFlag) {
         nprocs = opts.jValue;
     } else {
         sem_init(&result_sem, 0, 1);
         singleThreadProcess(args);
         sem_destroy(&result_sem);
+        free(npage_onfile);
+        free(args);
         return 0;
-    }         
-    nfiles = opts.fileCount;               
-    pagesz = sysconf(_SC_PAGE_SIZE); // Let the system decide how big a page is
+    }                       
     order = malloc(sizeof(sem_t) * nprocs);
-    npage_onfile = malloc(sizeof(int) * nfiles);
-
-    memset(npage_onfile, 0, sizeof(int) * nfiles);
     sem_init(&mutex, 0, 1);
     sem_init(&filled, 0, 0);
     sem_init(&page, 0, 0);
@@ -356,13 +356,14 @@ void renqueue(result_t *result)
         }
         result_tail->next = result;
     }
-
-    result_t *curr = result;
-    for (; curr->next != NULL; curr = curr->next)
-    {
+    if(result != NULL){
+        result_t *curr = result;
+        for (; curr->next != NULL; curr = curr->next)
+        {
+        }
+        
+        result_tail = curr;
     }
-
-    result_tail = curr;
     sem_post(&result_sem);
 }
 
@@ -446,34 +447,49 @@ void *consumer(void *args)
     return NULL;
 }
 void singleThreadProcess(arg_t *args) {
-    char **fnames = args->argv;
-    for (int i = 0; i < args->argc; i++) {
+    arg_t *arg = (arg_t *)args;
+    char **fnames = arg->argv;
+    for (int i = 0; i < arg->argc; i++)
+    {
         int fd = open(fnames[i], O_RDONLY);
+
         if (fd == -1)
             handle_error("open error");
 
         struct stat sb;
+
         if (fstat(fd, &sb) == -1)
             handle_error("fstat error");
 
         if (sb.st_size == 0)
             continue;
 
+        int p4f = sb.st_size / pagesz;
+
+        if ((double)sb.st_size / pagesz > p4f)
+            p4f++;
+
+        int offset = 0;
+        npage_onfile[i] = p4f;
         char *addr = mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
-        if (addr == MAP_FAILED)
-            handle_error("mmap failed");
 
-        work_t work;
-        work.addr = addr;
-        work.pagesz = sb.st_size;
-        work.filenm = i;
-        work.pagenm = 0; // 仅一个页面的简化处理
-        work.next = NULL;
+        for (int j = 0; j < p4f; j++)
+        {
+            // it should be less than or equal to the default page size
+            int curr_pagesz = (j < p4f - 1) ? pagesz : sb.st_size - ((p4f - 1) * pagesz);
+            offset += curr_pagesz;
 
-        result_t *result = compress(work);
-        renqueue(result);
+            work_t work;
+            work.addr = addr;
+            work.filenm = i;
+            work.pagenm = j;
+            work.pagesz = curr_pagesz;
+            work.next = NULL;
 
-        munmap(addr, sb.st_size);
+            result_t *result = compress(work);
+            renqueue(result);
+            addr += curr_pagesz;
+        }
         close(fd);
     }
 
