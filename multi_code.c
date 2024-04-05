@@ -136,14 +136,67 @@ int main(int argc, char **argv)
 
     pthread_t pid, cid[nprocs], collector_pid;
 
-    pthread_create(&pid, NULL, producer, (void *)args);
+    //pthread_create(&pid, NULL, producer, (void *)args);
 
     for (int i = 0; i < nprocs; i++)
     {
         sem_init(&order[i], 0, i ? 0 : 1);
         pthread_create(&cid[i], NULL, consumer, (void *)args);
     }
+    char **fnames = args->argv;
+    for (int i = 0; i < args->argc; i++)
+    {
+        int fd = open(fnames[i], O_RDONLY);
 
+        if (fd == -1)
+            handle_error("open error");
+
+        struct stat sb;
+
+        if (fstat(fd, &sb) == -1)
+            handle_error("fstat error");
+
+        if (sb.st_size == 0)
+            continue;
+
+        int p4f = sb.st_size / pagesz;
+
+        if ((double)sb.st_size / pagesz > p4f)
+            p4f++;
+
+        int offset = 0;
+        npage_onfile[i] = p4f;
+        char *addr = mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+
+        for (int j = 0; j < p4f; j++)
+        {
+            // it should be less than or equal to the default page size
+            int curr_pagesz = (j < p4f - 1) ? pagesz : sb.st_size - ((p4f - 1) * pagesz);
+            offset += curr_pagesz;
+
+            work_t work;
+            work.addr = addr;
+            work.filenm = i;
+            work.pagenm = j;
+            work.pagesz = curr_pagesz;
+            work.next = NULL;
+
+            sem_wait(&mutex);
+            wenqueue(work);
+            sem_post(&mutex);
+            sem_post(&filled);
+
+            addr += curr_pagesz;
+        }
+
+        close(fd);
+    }
+
+    done = 1;
+    for (int i = 0; i < nprocs; i++)
+    {
+        sem_post(&filled);
+    }
     pthread_create(&collector_pid, NULL, collectResult, (void *)args);
 
     for (int i = 0; i < nprocs; i++)
@@ -151,7 +204,7 @@ int main(int argc, char **argv)
         pthread_join(cid[i], NULL);
     }
     encode_done = 1;
-    pthread_join(pid, NULL);
+    //pthread_join(pid, NULL);
     pthread_join(collector_pid, NULL);
 
 
